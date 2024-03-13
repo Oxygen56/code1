@@ -2,7 +2,7 @@ import pickle
 import time
 
 dataset_name = 'Ciao' # dataset: Epinions, Ciao or yelp
-dataset_path = '/Data/yuankun/sr_cl/datasets/' + dataset_name + '/'
+dataset_path = '../dataset/' + dataset_name + '/'
 
 
 # 20 表示0.2作为测试

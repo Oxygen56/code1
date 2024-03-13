@@ -24,7 +24,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', default='Ciao', help='dataset name: Ciao/Epinions')
 parser.add_argument('--test_prop', default=0.1, help='the proportion of data used for test')
 args = parser.parse_args()
-
 # load data
 if args.dataset == 'Ciao':
 	click_f = loadmat('./Ciao/rating.mat')['rating']
@@ -105,10 +104,11 @@ train_set = pos_list[2 * num_test:]
 
 print('Train samples: {}, Valid samples: {}, Test samples: {}, Total samples: {}'.format(len(train_set), len(valid_set), len(test_set), len(pos_list)))
 
-with open('dataset_filter5.pkl', 'wb') as f:
+with open('Ciao/dataset_filter5.pkl', 'wb') as f:
 	pickle.dump(train_set, f)
 	pickle.dump(valid_set, f)
 	pickle.dump(test_set, f)
+	pickle.dump(pos_list, f)
 
 
 
@@ -202,7 +202,7 @@ for u in tqdm(range(user_count + 1)):
 print('trust user with items size: ', count_0, count_1)
 
 
-with open('list_filter5.pkl', 'wb') as f:
+with open('Ciao/list_filter5.pkl', 'wb') as f:
 	pickle.dump(u_items_list, f)
 	pickle.dump(u_users_list, f)
 	pickle.dump(u_users_items_list, f)

@@ -1,7 +1,10 @@
 from torch import nn
 import torch.nn.functional as F
 import torch
+import numpy as np
+import scipy.sparse as sp
 from tranh import TransH
+import pickle
 
 class _MultiLayerPercep(nn.Module):
     def __init__(self, input_dim, output_dim):
@@ -287,6 +290,8 @@ class _ItemModel(nn.Module):
         return z
 
 
+
+
 class DeppGraph(nn.Module):
     '''GraphRec model proposed in the paper Graph neural network for social recommendation 
 
@@ -297,18 +302,27 @@ class DeppGraph(nn.Module):
         emb_dim: the dimension of user and item embedding (default = 64).
 
     '''
-    def __init__(self,  user_emb, item_emb, rate_emb, num_users, num_items, num_rate_levels, emb_dim = 64):
+    def __init__(self,  user_emb, item_emb, rate_emb, num_users, num_items, num_rate_levels, pos_list, emb_dim = 64):
         super(DeppGraph, self).__init__()
+        self.user = {}  # map user names to id
+        self.item = {}  # map item names to id
+        self.trainingData = pos_list[:]
+        self.__generateSet()
         self.num_users = num_users
         self.num_items = num_items
         self.num_rate_levels = num_rate_levels
         self.emb_dim = emb_dim
-        self.user_emb = nn.Embedding(self.num_users, self.emb_dim, padding_idx = 0)
-        self.user_emb.weight.data.copy_(torch.from_numpy(user_emb))
+        self.user_emb = nn.Embedding(self.num_users, self.emb_dim, padding_idx=0)
         self.item_emb = nn.Embedding(self.num_items, self.emb_dim, padding_idx = 0)
+        self.ego_embeddings = torch.cat((self.user_emb.weight, self.item_emb.weight), dim=0)
         self.item_emb.weight.data.copy_(torch.from_numpy(item_emb))
         self.rate_emb = nn.Embedding(self.num_rate_levels, self.emb_dim, padding_idx = 0)
         self.rate_emb.weight.data.copy_(torch.from_numpy(rate_emb))
+
+        self.norm_adj = self.create_joint_sparse_adj_tensor()
+
+        self.user_emb.weight.data.copy_(torch.from_numpy(user_emb))
+
 
         self.user_model = _UserModel(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
 
@@ -327,33 +341,60 @@ class DeppGraph(nn.Module):
             nn.Linear(self.emb_dim, 1)
         )
 
+    def __generateSet(self):
+        for i,entry in enumerate(self.trainingData):
+            userName,itemName,rating = entry
+            if userName not in self.user:
+                self.user[userName] = len(self.user)
+            # order the item
+            if itemName not in self.item:
+                self.item[itemName] = len(self.item)
 
 
+    # 添加随机噪声的LightGCN编码器（仿写）
+    def perturbed_LightGCN_encoder(self,emb, adj, n_layers, eps):
+        all_embs = []
+        for k in range(n_layers):
+            emb = torch.sparse.mm(adj, emb)
+            random_noise = torch.rand_like(emb)
+            emb += torch.sign(emb) * F.normalize(random_noise, p=2, dim=1) * eps
+            all_embs.append(emb)
+        all_embs = torch.mean(torch.stack(all_embs), dim=0)
+        user_embeddings, item_embeddings = torch.split(all_embs, [self.num_users, self.num_items], 0)
+        return user_embeddings, item_embeddings
+
+    def create_joint_sparse_adj_tensor(self):
+        norm_adj = self.create_joint_sparse_adjaceny()
+        indices = torch.tensor(np.vstack((norm_adj.row, norm_adj.col)).astype(np.int64), dtype=torch.long)
+        values = torch.tensor(norm_adj.data, dtype=torch.float32)
+        size = torch.Size(norm_adj.shape)
+        adj_tensor = torch.sparse_coo_tensor(indices, values, size)
+        return adj_tensor
+
+    def create_joint_sparse_adjaceny(self):
+        '''
+        return a sparse adjacency matrix with the shape (user number + item number, user number + item number)
+        '''
+        n_nodes = self.num_users + self.num_items
+        row_idx = [self.user[pair[0]] for pair in self.trainingData]
+        col_idx = [self.item[pair[1]] for pair in self.trainingData]
+        user_np = np.array(row_idx)
+        item_np = np.array(col_idx)
+        ratings = np.ones_like(user_np, dtype=np.float32)
+        tmp_adj = sp.csr_matrix((ratings, (user_np, item_np + self.num_users)), shape=(n_nodes, n_nodes))
+        adj_mat = tmp_adj + tmp_adj.T
+        # pre adjcency matrix
+        rowsum = np.array(adj_mat.sum(1))
+        d_inv = np.power(rowsum, -0.5).flatten()
+        d_inv[np.isinf(d_inv)] = 0.
+        d_mat_inv = sp.diags(d_inv)
+        norm_adj_tmp = d_mat_inv.dot(adj_mat)
+        adj_matrix = norm_adj_tmp.dot(d_mat_inv)
+        return adj_matrix
 
 
     def forward(self, uids, iids, u_item_pad, u_user_pad, u_user_item_pad, i_user_pad, sf_user_pad, sf_user_item_pad, i_friends_pad, i_friends_user_pad, pos_list, neg_list, train_state=True):
-        '''
-        Args:
-            uids: the user id sequences.
-            iids: the item id sequences.
-            u_item_pad: the padded user-item graph.
-            u_user_pad: the padded user-user graph.
-            u_user_item_pad: the padded user-user-item graph.
-            i_user_pad: the padded item-user graph.
-            sf_user_pad: the padded user-user share common fans graph
 
-        Shapes:
-            uids: (B).
-            iids: (B).
-            u_item_pad: (B, ItemSeqMaxLen, 2).
-            u_user_pad: (B, UserSeqMaxLen).
-            u_user_item_pad: (B, UserSeqMaxLen, ItemSeqMaxLen, 2).
-            i_user_pad: (B, UserSeqMaxLen, 2).
-            sf_user_pad: (B, SfuserSeqMaxLen, 2)
-
-        Returns:
-            the predicted rate scores of the user to the item.
-        '''
 
         h = self.user_model(uids, iids, u_item_pad, u_user_pad, u_user_item_pad, sf_user_pad, sf_user_item_pad)
         z = self.item_model(uids, iids, i_user_pad, i_friends_pad, i_friends_user_pad)

@@ -160,8 +160,8 @@ def implicit_user_relations(dataset_path):
 
 
 if __name__ == '__main__':
-    implicit_item_relations('Epinions/')
-    implicit_user_relations('Epinions/')
+    implicit_item_relations('Ciao/')
+    implicit_user_relations('Ciao/')
 
 
 

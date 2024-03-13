@@ -23,6 +23,7 @@ def process_dataset():
         (user_count, item_count, rate_count) = pickle.load(f)
 
 
+    # 过滤掉训练集中评分为0的用户和项目
     train_user_set = set([u for u,i,r in train_set if r != 0])
     train_item_set = set([i for u,i,r in train_set if r != 0])
     new_valid_set = []
@@ -39,6 +40,7 @@ def process_dataset():
     print('test set and filtered test set len: ', len(test_set), len(new_test_set))
 
     # 先统计training数据集中user的点击个数
+    # 创建以用户为键，物品和评分为值的字典
     training_rating_dict = defaultdict(list)
     for u,i,r in train_set:
         if r == 0:
@@ -46,7 +48,9 @@ def process_dataset():
         training_rating_dict[u].append((i,r))
 
 
-
+    # 冷启动处理，这里的“冷启动”指的是如何对那些在系统中活动不够频繁的用户（即缺乏足够的历史交互信息）做出有效推荐
+    # 根据用户在训练集中的物品-平分对数量（点击过的，或者说对该用户来说评分不为0的物品数量）分组，分析不同用户组在新测试集中的表现
+    # 这个组表示用户历史评分记录的稀疏性
     n_20, n_40, n_80, n_160, n_320 = set(),set(),set(),set(),set()
     cold_rating_list_20, cold_rating_list_40,cold_rating_list_80,cold_rating_list_160, cold_rating_list_320 = [],[],[],[], []
     for u,i,r in new_test_set: # 原本统计test，现在查看training set
@@ -71,7 +75,7 @@ def process_dataset():
     print( 'cold rating list of user distribution: ', len(n_20), len(n_40), len(n_80), len(n_160), len(n_320))
 
 
-    # 统计user的social relation个数
+    # 统计user的社交关系数量，根据社交关系数量分组，评估社交关系稀疏性对推荐效果的影响
     cold_start_user_list_0, cold_start_user_list_5, cold_start_user_list_10,cold_start_user_list_20,cold_start_user_list_40, cold_start_user_list_80 = [],[],[],[],[], []
     for u in range(1,user_count+1):
         if u_users_list[u] == [0]:
@@ -89,7 +93,7 @@ def process_dataset():
 
 
 
-
+    # 结合评分数据和社交关系数据，专注于分析社交关系冷启动用户在新测试集中的评分数据
     cold_social_list_0, cold_social_list_5, cold_social_list_10, cold_social_list_20, cold_social_list_40, cold_social_list_80 = [], [], [], [], [], []
     for u,i,r in new_test_set:
         if u in set(cold_start_user_list_0):
