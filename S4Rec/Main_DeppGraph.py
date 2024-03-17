@@ -18,7 +18,6 @@ from os.path import join
 
 import torch
 from torch import nn
-import tensorflow as tf
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import torch.optim as optim
@@ -33,7 +32,7 @@ from dataloader import GRDataset
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset_path', default='./dataset/Ciao/', help='dataset directory path: datasets/Ciao/Epinions')
-parser.add_argument('--dataset_name', default='Ciao', help='Ciap, Epinions, yelp')
+parser.add_argument('--dataset_name', default='Ciao', help='Ciap, Epinions, Yelp')
 parser.add_argument('--batch_size', type=int, default=256, help='input batch size')
 parser.add_argument('--embed_dim', type=int, default=80, help='the dimension of embedding')
 parser.add_argument('--epoch', type=int, default=30, help='the number of epochs to train for')
@@ -43,7 +42,7 @@ parser.add_argument('--lr_dc', type=float, default=0.5, help='learning rate deca
 parser.add_argument('--lr_dc_step', type=int, default=50,
                     help='the number of steps after which the learning rate decay')
 parser.add_argument('--test', type=int, default=0, help='test')
-parser.add_argument('--n_layer', type=int, default=2, help='n_layer')
+parser.add_argument('--n_layers', type=int, default=2, help='n_layers')
 parser.add_argument('--cl_rate', type=float, default=0.5, help='cl_rate')
 parser.add_argument('--eps', type=float, default=0.1, help='eps')
 args = parser.parse_args()
@@ -142,8 +141,8 @@ def main():
     valid_loader = DataLoader(valid_data, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
     test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
 
-    model = DeppGraph(user_emb, item_emb, rate_emb, user_count + 1, item_count + 1, rate_count + 1, pos_list, args.embed_dim).to(
-        device)
+    model = DeppGraph(user_emb, item_emb, rate_emb, user_count + 1, item_count + 1, rate_count + 1, pos_list,
+                      args.embed_dim).to(device)
 
     # set test=1 if testing mode is executed
     if args.test:
@@ -211,7 +210,6 @@ def main():
 def trainForEpoch(train_loader, valid_loader, test_loader, model, optimizer, epoch, num_epochs, criterion, best_mae,
                   log_aggr=1):
     model.train()
-
     sum_epoch_loss = 0
     valid_loss_list, test_loss_list = [], []
 
@@ -232,24 +230,23 @@ def trainForEpoch(train_loader, valid_loader, test_loader, model, optimizer, epo
         i_friend_list = i_friend_list.to(device)
         if_item_users = if_item_users.to(device)
 
-        perturbed_user_embeddings1, perturbed_item_embeddings1 = model.perturbed_LightGCN_encoder(model.ego_embeddings,
+        ego_embeddings = torch.cat((model.user_emb.weight, model.item_emb.weight), dim=0)
+        perturbed_user_embeddings1, perturbed_item_embeddings1 = model.perturbed_LightGCN_encoder(ego_embeddings,
                                                                                                   model.norm_adj,
                                                                                                   args.n_layers,
-                                                                                                  float(args['--eps']))
-        perturbed_user_embeddings2, perturbed_item_embeddings2 = model.perturbed_LightGCN_encoder(model.ego_embeddings,
+                                                                                                  args.eps)
+        perturbed_user_embeddings2, perturbed_item_embeddings2 = model.perturbed_LightGCN_encoder(ego_embeddings,
                                                                                                   model.norm_adj,
                                                                                                   args.n_layers,
-                                                                                                  float(args['--eps']))
+                                                                                                  args.eps)
         contrastive_loss = calc_cl_loss(uids, iids, perturbed_user_embeddings1, perturbed_item_embeddings1,
                                         perturbed_user_embeddings2, perturbed_item_embeddings2)
         optimizer.zero_grad()
-        outputs, r = model(uids, iids, u_items, u_users, u_users_items, i_users, i_sf_users, i_sf_users_items,
-                           i_friend_list, if_item_users, pos_list, neg_list, True)
-
-
+        outputs, tranh_loss = model(uids, iids, u_items, u_users, u_users_items, i_users, i_sf_users, i_sf_users_items,
+                                    i_friend_list, if_item_users, pos_list, neg_list, True)
 
         loss = criterion(outputs, labels.unsqueeze(1))
-        loss = 2 * r + loss + contrastive_loss
+        loss = 2 * tranh_loss + loss + contrastive_loss
         loss.backward()
         optimizer.step()
 
@@ -260,7 +257,7 @@ def trainForEpoch(train_loader, valid_loader, test_loader, model, optimizer, epo
 
         if i % log_aggr == 0:
             print('[TRAIN Main 2] epoch %d/%d batch loss: %.4f %.4f (avg %.4f) (%.2f im/s)'
-                  % (epoch + 1, num_epochs, loss_val, r.item(), sum_epoch_loss / (i + 1),
+                  % (epoch + 1, num_epochs, loss_val, tranh_loss.item(), sum_epoch_loss / (i + 1),
                      len(uids) / (time.time() - start)))
 
         start = time.time()
@@ -303,6 +300,46 @@ def trainForEpoch(train_loader, valid_loader, test_loader, model, optimizer, epo
     return valid_loss_list, test_loss_list
 
 
+# 对比学习的损失计算（仿写）
+def calc_cl_loss(uids, iids, perturbed_user_embeddings1, perturbed_item_embeddings1, perturbed_user_embeddings2,
+                 perturbed_item_embeddings2):
+    unique_u_idx = torch.unique(uids, sorted=True)
+    unique_v_idx = torch.unique(iids, sorted=True)
+
+    p_user_emb1 = perturbed_user_embeddings1[unique_u_idx]
+    p_item_emb1 = perturbed_item_embeddings1[unique_v_idx]
+    p_user_emb2 = perturbed_user_embeddings2[unique_u_idx]
+    p_item_emb2 = perturbed_item_embeddings2[unique_v_idx]
+
+    # L2归一化
+    p_user_emb1 = F.normalize(p_user_emb1, p=2, dim=1)
+    p_user_emb2 = F.normalize(p_user_emb2, p=2, dim=1)
+    p_item_emb1 = F.normalize(p_item_emb1, p=2, dim=1)
+    p_item_emb2 = F.normalize(p_item_emb2, p=2, dim=1)
+
+    # 正样本得分
+    pos_score_u = (p_user_emb1 * p_user_emb2).sum(dim=1)
+    pos_score_i = (p_item_emb1 * p_item_emb2).sum(dim=1)
+
+    # 所有样本得分
+    ttl_score_u = torch.matmul(p_user_emb1, p_user_emb2.transpose(0, 1)) / 0.2
+    ttl_score_i = torch.matmul(p_item_emb1, p_item_emb2.transpose(0, 1)) / 0.2
+
+    # softmax转化
+    pos_score_u_exp = torch.exp(pos_score_u / 0.2)
+    pos_score_i_exp = torch.exp(pos_score_i / 0.2)
+    ttl_score_u_exp_sum = torch.logsumexp(ttl_score_u, dim=1)
+    ttl_score_i_exp_sum = torch.logsumexp(ttl_score_i, dim=1)
+
+    # 对比损失计算
+    cl_loss_u = -torch.sum(torch.log(pos_score_u_exp) - ttl_score_u_exp_sum)
+    cl_loss_i = -torch.sum(torch.log(pos_score_i_exp) - ttl_score_i_exp_sum)
+
+    # 总损失
+    cl_loss = args.cl_rate * (cl_loss_u + cl_loss_i)
+    return cl_loss
+
+
 def validate(valid_loader, model):
     model.eval()
     errors = []
@@ -327,54 +364,14 @@ def validate(valid_loader, model):
             preds, r = model(uids, iids, u_items, u_users, u_users_items, i_users, i_sf_users, i_sf_users_items,
                              i_friend_list, if_item_users, pos_list, neg_list, False)
             error = torch.abs(preds.squeeze(1) - labels)
-            errors.extend(error.data.cpu().numpy().tolist())
+            errors.extend(error.cpu().data.numpy().tolist())
             for idx, uid in enumerate(uids):
                 results.append(
-                    [uids[idx].cpu().item(), iids[idx].cpu().item(), labels[idx].cpu().item(), preds[idx].cpu().item()])
+                    [uids[idx].item(), iids[idx].item(), labels[idx].item(), preds[idx].item()])
 
     mae = np.mean(errors)
     rmse = np.sqrt(np.mean(np.power(errors, 2)))
     return mae, rmse, results
-
-
-# 对比学习的损失计算（仿写）
-def calc_cl_loss(uids, iids, perturbed_user_embeddings1, perturbed_item_embeddings1, perturbed_user_embeddings2, perturbed_item_embeddings2):
-    temperature = 0.2
-    cl_rate = float(args.cl_rate)
-    unique_u_idx = torch.unique(uids, sorted=True)
-    unique_v_idx = torch.unique(iids, sorted=True)
-
-    p_user_emb1 = perturbed_user_embeddings1[unique_u_idx]
-    p_item_emb1 = perturbed_item_embeddings1[unique_v_idx]
-    p_user_emb2 = perturbed_user_embeddings2[unique_u_idx]
-    p_item_emb2 = perturbed_item_embeddings2[unique_v_idx]
-    # L2归一化
-    p_user_emb1 = F.normalize(p_user_emb1, p=2, dim=1)
-    p_user_emb2 = F.normalize(p_user_emb2, p=2, dim=1)
-    p_item_emb1 = F.normalize(p_item_emb1, p=2, dim=1)
-    p_item_emb2 = F.normalize(p_item_emb2, p=2, dim=1)
-
-    # 正样本得分
-    pos_score_u = (p_user_emb1 * p_user_emb2).sum(dim=1)
-    pos_score_i = (p_item_emb1 * p_item_emb2).sum(dim=1)
-
-    # 所有样本得分
-    ttl_score_u = torch.matmul(p_user_emb1, p_user_emb2.transpose(0, 1)) / temperature
-    ttl_score_i = torch.matmul(p_item_emb1, p_item_emb2.transpose(0, 1)) / temperature
-
-    # softmax转化
-    pos_score_u_exp = torch.exp(pos_score_u / temperature)
-    pos_score_i_exp = torch.exp(pos_score_i / temperature)
-    ttl_score_u_exp_sum = torch.logsumexp(ttl_score_u, dim=1)
-    ttl_score_i_exp_sum = torch.logsumexp(ttl_score_i, dim=1)
-
-    # 对比损失计算
-    cl_loss_u = -torch.sum(torch.log(pos_score_u_exp) - ttl_score_u_exp_sum)
-    cl_loss_i = -torch.sum(torch.log(pos_score_i_exp) - ttl_score_i_exp_sum)
-
-    # 总损失
-    cl_loss = cl_rate * (cl_loss_u + cl_loss_i)
-    return cl_loss
 
 
 if __name__ == '__main__':
