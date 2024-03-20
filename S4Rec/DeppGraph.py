@@ -8,6 +8,7 @@ import pickle
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+
 class _MultiLayerPercep(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(_MultiLayerPercep, self).__init__()
@@ -37,6 +38,7 @@ class _UserModel(nn.Module):
     ''' User modeling to learn user latent factors.
     User modeling leverages two types aggregation: item aggregation and social aggregation
     '''
+
     def __init__(self, emb_dim, user_emb, item_emb, rate_emb):
         super(_UserModel, self).__init__()
         self.user_emb = user_emb
@@ -90,8 +92,10 @@ class _UserModel(nn.Module):
     def forward(self, uids, iids, u_item_pad, u_user_pad, u_user_item_pad, sf_user_pad, sf_user_item_pad):
         # item aggregation
         q_a = self.item_emb(u_item_pad[:, :, 0])  # B x maxi_len x emb_dim
+
         mask_u = torch.where(u_item_pad[:, :, 0] > 0, torch.tensor([1.], device=self.device),
                              torch.tensor([0.], device=self.device))  # B x maxi_len
+
         u_item_er = self.rate_emb(u_item_pad[:, :, 1])  # B x maxi_len x emb_dim
         x_ia = self.g_v(torch.cat([q_a, u_item_er], dim=2).view(-1, 2 * self.emb_dim)).view(
             q_a.size())  # B x maxi_len x emb_dim
@@ -110,8 +114,10 @@ class _UserModel(nn.Module):
 
         # sf_user
         q_a_f = self.item_emb(sf_user_item_pad[:, :, :, 0])  # B x maxu_len x maxi_len x emb_dim
+
         mask_sf = torch.where(sf_user_item_pad[:, :, :, 0] > 0, torch.tensor([1.], device=self.device),
                               torch.tensor([0.], device=self.device))  # B x maxu_len x maxi_len
+
         sf_user_item_er = self.rate_emb(sf_user_item_pad[:, :, :, 1])  # B x maxu_len x maxi_len x emb_dim
         x_ia_sf = self.g_v(torch.cat([q_a_f, sf_user_item_er], dim=3).view(-1, 2 * self.emb_dim)).view(
             q_a_f.size())  # B x maxu_len x maxi_len x emb_dim
@@ -207,6 +213,7 @@ class _UserModel(nn.Module):
 class _ItemModel(nn.Module):
     '''Item modeling to learn item latent factors.
     '''
+
     def __init__(self, emb_dim, user_emb, item_emb, rate_emb):
         super(_ItemModel, self).__init__()
         self.emb_dim = emb_dim
@@ -321,7 +328,7 @@ class _ItemModel(nn.Module):
 
 
 class DeppGraph(nn.Module):
-    '''GraphRec model proposed in the paper Graph neural network for social recommendation
+    '''GraphRec model proposed in the paper Graph neural network for social recommendation 
 
     Args:
         number_users: the number of users in the dataset.
@@ -349,16 +356,26 @@ class DeppGraph(nn.Module):
         self.item_emb = nn.Embedding(self.num_items, self.emb_dim, padding_idx=0)
         self.item_emb.weight.data.copy_(torch.from_numpy(item_emb))
 
+        ego_embeddings = torch.cat((self.user_emb.weight, self.item_emb.weight), dim=0)
+        ego_embeddings = ego_embeddings.to(device)
+        self.norm_adj = self.create_joint_sparse_adj_tensor()
+        self.perturbed_user_embeddings1, self.perturbed_item_embeddings1 = self.perturbed_LightGCN_encoder(
+            ego_embeddings,
+            self.norm_adj,
+            2,
+            0.1)
+        self.perturbed_user_embeddings2, self.perturbed_item_embeddings2 = self.perturbed_LightGCN_encoder(
+            ego_embeddings,
+            self.norm_adj,
+            2,
+            0.1)
+
         self.rate_emb = nn.Embedding(self.num_rate_levels, self.emb_dim, padding_idx=0)
         self.rate_emb.weight.data.copy_(torch.from_numpy(rate_emb))
-
-        self.norm_adj = self.create_joint_sparse_adj_tensor()
 
         self.user_model = _UserModel(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
 
         self.item_model = _ItemModel(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
-
-        self.ego_embeddings = torch.cat((self.user_emb.weight, self.item_emb.weight), dim=0)
 
         self.tranh = TransH(self.user_emb, self.item_emb, self.item_emb, num_users, num_items, 5, self.emb_dim)
 
@@ -386,7 +403,7 @@ class DeppGraph(nn.Module):
     def perturbed_LightGCN_encoder(self, emb, adj, n_layers, eps):
         all_embs = []
         for k in range(n_layers):
-            emb = torch.sparse.mm(adj, emb).to(self.device)
+            emb = torch.sparse.mm(adj, emb)
             random_noise = torch.rand_like(emb, device=self.device)
             emb += torch.sign(emb) * F.normalize(random_noise, p=2, dim=1) * eps
             all_embs.append(emb)
@@ -411,6 +428,7 @@ class DeppGraph(nn.Module):
         return a sparse adjacency matrix with the shape (user number + item number, user number + item number)
         '''
         n_nodes = self.num_users + self.num_items
+
         row_idx = [self.user[pair[0]] for pair in self.trainingData]
         col_idx = [self.item[pair[1]] for pair in self.trainingData]
         user_np = np.array(row_idx)
@@ -433,6 +451,8 @@ class DeppGraph(nn.Module):
         h = self.user_model(uids, iids, u_item_pad, u_user_pad, u_user_item_pad, sf_user_pad, sf_user_item_pad)
         z = self.item_model(uids, iids, i_user_pad, i_friends_pad, i_friends_user_pad)
 
+        contrastive_loss = self.calc_cl_loss(uids, iids)
+
         tranh_loss = 0
         if train_state:
             self.tranh.normalizeEmbedding()
@@ -440,4 +460,42 @@ class DeppGraph(nn.Module):
 
         r_ij = self.rate_pred(torch.cat([h, z, h * z], dim=1))
 
-        return r_ij, tranh_loss
+        return r_ij, tranh_loss, contrastive_loss
+
+    # 对比学习的损失计算（仿写）
+    def calc_cl_loss(self, uids, iids):
+        unique_u_idx = torch.unique(uids, sorted=True)
+        unique_v_idx = torch.unique(iids, sorted=True)
+
+        p_user_emb1 = self.perturbed_user_embeddings1[unique_u_idx]
+        p_item_emb1 = self.perturbed_item_embeddings1[unique_v_idx]
+        p_user_emb2 = self.perturbed_user_embeddings2[unique_u_idx]
+        p_item_emb2 = self.perturbed_item_embeddings2[unique_v_idx]
+
+        # L2归一化
+        p_user_emb1 = F.normalize(p_user_emb1, p=2, dim=1)
+        p_user_emb2 = F.normalize(p_user_emb2, p=2, dim=1)
+        p_item_emb1 = F.normalize(p_item_emb1, p=2, dim=1)
+        p_item_emb2 = F.normalize(p_item_emb2, p=2, dim=1)
+
+        # 正样本得分
+        pos_score_u = (p_user_emb1 * p_user_emb2).sum(dim=1)
+        pos_score_i = (p_item_emb1 * p_item_emb2).sum(dim=1)
+
+        # 所有样本得分
+        ttl_score_u = torch.matmul(p_user_emb1, p_user_emb2.transpose(0, 1)) / 0.2
+        ttl_score_i = torch.matmul(p_item_emb1, p_item_emb2.transpose(0, 1)) / 0.2
+
+        # softmax转化
+        pos_score_u_exp = torch.exp(pos_score_u / 0.2)
+        pos_score_i_exp = torch.exp(pos_score_i / 0.2)
+        ttl_score_u_exp_sum = torch.logsumexp(ttl_score_u, dim=1)
+        ttl_score_i_exp_sum = torch.logsumexp(ttl_score_i, dim=1)
+
+        # 对比损失计算
+        cl_loss_u = -torch.sum(torch.log(pos_score_u_exp) - ttl_score_u_exp_sum)
+        cl_loss_i = -torch.sum(torch.log(pos_score_i_exp) - ttl_score_i_exp_sum)
+
+        # 总损失
+        cl_loss = 0.5 * (cl_loss_u + cl_loss_i)
+        return cl_loss

@@ -31,9 +31,10 @@ from DeppGraph import DeppGraph
 from dataloader import GRDataset
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset_path', default='./dataset/Ciao/', help='dataset directory path: datasets/Ciao/Epinions')
-parser.add_argument('--dataset_name', default='Ciao', help='Ciap, Epinions, Yelp')
-parser.add_argument('--batch_size', type=int, default=256, help='input batch size')
+parser.add_argument('--dataset_path', default='./dataset/Epinions/',
+                    help='dataset directory path: datasets/Ciao/Epinions')
+parser.add_argument('--dataset_name', default='Epinions', help='Ciap, Epinions, Yelp')
+parser.add_argument('--batch_size', type=int, default=1024, help='input batch size')
 parser.add_argument('--embed_dim', type=int, default=80, help='the dimension of embedding')
 parser.add_argument('--epoch', type=int, default=30, help='the number of epochs to train for')
 parser.add_argument('--seed', type=int, default=14, help='the number of random seed to train for')
@@ -57,10 +58,10 @@ if torch.cuda.is_available():
 
 here = os.path.dirname(os.path.abspath(__file__))
 
-fn = 'results/' + args.dataset_name
+fn = 'results_epinions/' + args.dataset_name
 
-if not os.path.exists('results'):
-    os.mkdir('results')
+if not os.path.exists('results_epinions'):
+    os.mkdir('results_epinions')
 
 if not os.path.exists(fn):
     os.mkdir(fn)
@@ -230,23 +231,15 @@ def trainForEpoch(train_loader, valid_loader, test_loader, model, optimizer, epo
         i_friend_list = i_friend_list.to(device)
         if_item_users = if_item_users.to(device)
 
-        ego_embeddings = torch.cat((model.user_emb.weight, model.item_emb.weight), dim=0)
-        perturbed_user_embeddings1, perturbed_item_embeddings1 = model.perturbed_LightGCN_encoder(ego_embeddings,
-                                                                                                  model.norm_adj,
-                                                                                                  args.n_layers,
-                                                                                                  args.eps)
-        perturbed_user_embeddings2, perturbed_item_embeddings2 = model.perturbed_LightGCN_encoder(ego_embeddings,
-                                                                                                  model.norm_adj,
-                                                                                                  args.n_layers,
-                                                                                                  args.eps)
-        contrastive_loss = calc_cl_loss(uids, iids, perturbed_user_embeddings1, perturbed_item_embeddings1,
-                                        perturbed_user_embeddings2, perturbed_item_embeddings2)
         optimizer.zero_grad()
-        outputs, tranh_loss = model(uids, iids, u_items, u_users, u_users_items, i_users, i_sf_users, i_sf_users_items,
-                                    i_friend_list, if_item_users, pos_list, neg_list, True)
+        outputs, tranh_loss, contrastive_loss = model(uids, iids, u_items, u_users, u_users_items, i_users, i_sf_users,
+                                                      i_sf_users_items,
+                                                      i_friend_list, if_item_users, pos_list, neg_list, True)
 
         loss = criterion(outputs, labels.unsqueeze(1))
+
         loss = 2 * tranh_loss + loss + contrastive_loss
+
         loss.backward()
         optimizer.step()
 
@@ -256,9 +249,10 @@ def trainForEpoch(train_loader, valid_loader, test_loader, model, optimizer, epo
         iter_num = epoch * len(train_loader) + i + 1
 
         if i % log_aggr == 0:
-            print('[TRAIN Main 2] epoch %d/%d batch loss: %.4f %.4f (avg %.4f) (%.2f im/s)'
-                  % (epoch + 1, num_epochs, loss_val, tranh_loss.item(), sum_epoch_loss / (i + 1),
-                     len(uids) / (time.time() - start)))
+            print('[TRAIN Main 2] epoch %d/%d batch loss: %.4f %.4f %.4f (avg %.4f) (%.2f im/s)'
+                  % (
+                  epoch + 1, num_epochs, loss_val, contrastive_loss.item(), tranh_loss.item(), sum_epoch_loss / (i + 1),
+                  len(uids) / (time.time() - start)))
 
         start = time.time()
 
@@ -298,46 +292,6 @@ def trainForEpoch(train_loader, valid_loader, test_loader, model, optimizer, epo
             model.train()
 
     return valid_loss_list, test_loss_list
-
-
-# 对比学习的损失计算（仿写）
-def calc_cl_loss(uids, iids, perturbed_user_embeddings1, perturbed_item_embeddings1, perturbed_user_embeddings2,
-                 perturbed_item_embeddings2):
-    unique_u_idx = torch.unique(uids, sorted=True)
-    unique_v_idx = torch.unique(iids, sorted=True)
-
-    p_user_emb1 = perturbed_user_embeddings1[unique_u_idx]
-    p_item_emb1 = perturbed_item_embeddings1[unique_v_idx]
-    p_user_emb2 = perturbed_user_embeddings2[unique_u_idx]
-    p_item_emb2 = perturbed_item_embeddings2[unique_v_idx]
-
-    # L2归一化
-    p_user_emb1 = F.normalize(p_user_emb1, p=2, dim=1)
-    p_user_emb2 = F.normalize(p_user_emb2, p=2, dim=1)
-    p_item_emb1 = F.normalize(p_item_emb1, p=2, dim=1)
-    p_item_emb2 = F.normalize(p_item_emb2, p=2, dim=1)
-
-    # 正样本得分
-    pos_score_u = (p_user_emb1 * p_user_emb2).sum(dim=1)
-    pos_score_i = (p_item_emb1 * p_item_emb2).sum(dim=1)
-
-    # 所有样本得分
-    ttl_score_u = torch.matmul(p_user_emb1, p_user_emb2.transpose(0, 1)) / 0.2
-    ttl_score_i = torch.matmul(p_item_emb1, p_item_emb2.transpose(0, 1)) / 0.2
-
-    # softmax转化
-    pos_score_u_exp = torch.exp(pos_score_u / 0.2)
-    pos_score_i_exp = torch.exp(pos_score_i / 0.2)
-    ttl_score_u_exp_sum = torch.logsumexp(ttl_score_u, dim=1)
-    ttl_score_i_exp_sum = torch.logsumexp(ttl_score_i, dim=1)
-
-    # 对比损失计算
-    cl_loss_u = -torch.sum(torch.log(pos_score_u_exp) - ttl_score_u_exp_sum)
-    cl_loss_i = -torch.sum(torch.log(pos_score_i_exp) - ttl_score_i_exp_sum)
-
-    # 总损失
-    cl_loss = args.cl_rate * (cl_loss_u + cl_loss_i)
-    return cl_loss
 
 
 def validate(valid_loader, model):

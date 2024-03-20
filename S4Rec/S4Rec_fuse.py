@@ -176,14 +176,17 @@ def s4rec_cold_social_analysis(filename_deep, filename_wide):
         else:
             loss_80.append(abs(rp - cold_rating_80_dict[key]))
 
-    print(len(loss_0), len(loss_5), len(loss_10), len(loss_20), len(loss_40), len(loss_80))
+    print('-----------------------冷启动社交评估开始---------------------------')
+    print('len_lost_0: ', len(loss_0), 'len_lost_5: ', len(loss_5), 'len_lost_10: ', len(loss_10), 'len_lost_20: ',
+          len(loss_20), 'len_lost_40: ', len(loss_40), 'len_lost_80: ', len(loss_80))
     print('\n', 'fuse: ')
-    print('cold start rating: ', np.mean(loss_0), np.sqrt(np.mean(np.power(loss_0, 2))))
-    print('cold start rating: ', np.mean(loss_5), np.sqrt(np.mean(np.power(loss_5, 2))))
-    print('cold start rating: ', np.mean(loss_10), np.sqrt(np.mean(np.power(loss_10, 2))))
-    print('cold start rating: ', np.mean(loss_20), np.sqrt(np.mean(np.power(loss_20, 2))))
-    print('cold start rating: ', np.mean(loss_40), np.sqrt(np.mean(np.power(loss_40, 2))))
-    print('cold start rating: ', np.mean(loss_80), np.sqrt(np.mean(np.power(loss_80, 2))))
+    print('cold start social loss_0 mae, rmse: ', np.mean(loss_0), np.sqrt(np.mean(np.power(loss_0, 2))))
+    print('cold start social loss_5 mae, rmse: ', np.mean(loss_5), np.sqrt(np.mean(np.power(loss_5, 2))))
+    print('cold start social loss_10 mae, rmse: ', np.mean(loss_10), np.sqrt(np.mean(np.power(loss_10, 2))))
+    print('cold start social loss_20 mae, rmse: ', np.mean(loss_20), np.sqrt(np.mean(np.power(loss_20, 2))))
+    print('cold start social loss_40 mae, rmse: ', np.mean(loss_40), np.sqrt(np.mean(np.power(loss_40, 2))))
+    print('cold start social loss_80 mae, rmse: ', np.mean(loss_80), np.sqrt(np.mean(np.power(loss_80, 2))))
+    print('-----------------------冷启动社交评估结束---------------------------')
 
 
 #######################################################################################################
@@ -259,12 +262,15 @@ def s4rec_cold_rating_analysis(filename_deep, filename_wide):
             loss_320.append(abs(rp - cold_rating_320_dict[key]))
             fuse_rating_dict[key] = rp
 
-    print(len(loss_20), len(loss_40), len(loss_80), len(loss_160), len(loss_320))
-    print('cold start rating: ', np.mean(loss_20), np.sqrt(np.mean(np.power(loss_20, 2))))
-    print('cold start rating: ', np.mean(loss_40), np.sqrt(np.mean(np.power(loss_40, 2))))
-    print('cold start rating: ', np.mean(loss_80), np.sqrt(np.mean(np.power(loss_80, 2))))
-    print('cold start rating: ', np.mean(loss_160), np.sqrt(np.mean(np.power(loss_160, 2))))
-    print('cold start rating: ', np.mean(loss_320), np.sqrt(np.mean(np.power(loss_320, 2))))
+    print('-----------------------冷启动评分评估开始---------------------------')
+    print('len_loss_20: ', len(loss_20), 'len_loss_40: ', len(loss_40), 'len_loss_80: ', len(loss_80), 'len_loss_160: ',
+          len(loss_160), 'len_loss_320: ', len(loss_320))
+    print('cold start rating loss_20 mae, rmse: ', np.mean(loss_20), np.sqrt(np.mean(np.power(loss_20, 2))))
+    print('cold start rating loss_40 mae, rmse: ', np.mean(loss_40), np.sqrt(np.mean(np.power(loss_40, 2))))
+    print('cold start rating loss_80 mae, rmse: ', np.mean(loss_80), np.sqrt(np.mean(np.power(loss_80, 2))))
+    print('cold start rating loss_160 mae, rmse: ', np.mean(loss_160), np.sqrt(np.mean(np.power(loss_160, 2))))
+    print('cold start rating loss_320 mae, rmse: ', np.mean(loss_320), np.sqrt(np.mean(np.power(loss_320, 2))))
+    print('-----------------------冷启动评分评估结束---------------------------')
 
     x = []
     x.extend(loss_20)
@@ -275,198 +281,7 @@ def s4rec_cold_rating_analysis(filename_deep, filename_wide):
     print('total : ', np.mean(x), np.sqrt(np.mean(np.power(x, 2))))
 
 
-def evaluation_deep(filename_deep):
-    print('-----------------开始评估deep指标-------------------------')
-    # 步骤1: 从字典转换为每个用户的评分列表与实际评分列表
-    user_recommended_rates_deep = defaultdict(list)
-    user_actual_rates = defaultdict(list)
-
-    # 打开深度图模型的预测结果
-    with open('%s.txt' % filename_deep, 'r') as f:
-        for line in f:
-            loss_list = json.loads(line.strip())
-    # 加载深度图模型的预测结果
-    for u, i, r, rp in loss_list:  # user item rate predict-rate
-        user_recommended_rates_deep[u].append((i, rp))
-        user_actual_rates[u].append(i)  # 只需要item_id
-    # 为了确保推荐列表是根据评分排序的
-    for user in user_recommended_rates_deep:
-        user_recommended_rates_deep[user] = sorted(user_recommended_rates_deep[user], key=lambda x: x[1],
-                                                   reverse=True)
-
-        # 步骤3: 计算指标
-    # topk
-    ks = [5, 10, 20, 30]
-    # 要计算的指标
-    metrics = {
-        'hit_ratio': {k: [] for k in ks},
-        'recall': {k: [] for k in ks},
-        'precision': {k: [] for k in ks},
-        'ndcg': {k: [] for k in ks},
-        'mrr': {k: [] for k in ks}
-    }
-    for user in user_actual_rates:
-        recommended_items = [item for item, rate in user_recommended_rates_deep[user]]
-        actual_items = user_actual_rates[user]
-        for k in ks:
-            metrics['hit_ratio'][k].append(hit_ratio_at_k(recommended_items, actual_items, k))
-            metrics['recall'][k].append(recall_at_k(recommended_items, actual_items, k))
-            metrics['precision'][k].append(precision_at_k(recommended_items, actual_items, k))
-            metrics['ndcg'][k].append(ndcg_at_k(recommended_items, actual_items, k))
-            metrics['mrr'][k].append(mrr_at_k(recommended_items, actual_items, k))
-
-    # 创建一个空的DataFrame用于存储结果
-    columns = ['Top-K', 'Hit Ratio', 'Recall', 'Precision', 'NDCG', 'MRR']
-    results_df = pd.DataFrame(columns=columns)
-    # 步骤4: 打印指标
-    for k in ks:
-        row = {
-            'Top-K': k,
-            'Hit Ratio': np.mean(metrics['hit_ratio'][k]),
-            'Recall': np.mean(metrics['recall'][k]),
-            'Precision': np.mean(metrics['precision'][k]),
-            'NDCG': np.mean(metrics['ndcg'][k]),
-            'MRR': np.mean(metrics['mrr'][k])
-        }
-        results_df = results_df._append(row, ignore_index=True)
-        print(f'Top-{k}')
-        print(f"Hit Ratio: {np.mean(metrics['hit_ratio'][k]):.4f}")
-        print(f"Recall: {np.mean(metrics['recall'][k]):.4f}")
-        print(f"Precision: {np.mean(metrics['precision'][k]):.4f}")
-        print(f"NDCG: {np.mean(metrics['ndcg'][k]):.4f}")
-        print(f"MRR: {np.mean(metrics['mrr'][k]):.4f}")
-        print()
-    # 将DataFrame保存为CSV文件，这里可以添加数据集名称和参数到文件名中
-    dataset_name = 'Ciao'
-    # model_parameters = 'params1'  # 描述这次实验参数的字符串
-    csv_filename = f'{dataset_name}_metrics_deep_v0.csv'
-    results_df.to_csv(csv_filename, index=False)
-    print('-----------------结束评估deep指标-------------------------')
-
-
-def evaluation_s4rec(filename_deep, filename_wide):
-    print('-----------------开始评估s4rec指标-------------------------')
-    # 打开深度图模型的预测结果
-    with open('%s.txt' % filename_deep, 'r') as f:
-        for line in f:
-            loss_list = json.loads(line.strip())
-    deep_loss_dict = dict()
-    # 加载深度图模型的预测结果
-    for u, i, r, rp in loss_list:  # user item rate predict-rate
-        deep_loss_dict[str(u) + '-' + str(i)] = float(rp)  # {u-i : predict-rate}
-
-    # 加载广度图模型的预测结果
-    wide_loss_dict = dict()
-    with open('%s' % filename_wide, 'rb') as f:
-        for line in f:
-            data = line.decode().strip().split(',')
-            wide_loss_dict[data[0] + '-' + data[1]] = float(data[2])  # {u-i : predict-rate}
-
-    print(len(deep_loss_dict), len(wide_loss_dict))
-
-    # 步骤1: 从字典转换为每个用户的评分列表与实际评分列表
-    user_recommended_rates_s4rec = defaultdict(list)
-    user_actual_rates = defaultdict(list)
-
-    for key, r in deep_loss_dict.items():
-        # try:
-        #     rp = weight * r + (1 - weight) * wide_loss_dict[key]
-        # except KeyError:
-        #     key_error_count += 1
-        #     continue
-        rp = weight * r + (1 - weight) * wide_loss_dict[key]
-        user, item = key.split('-')
-        # 推荐物品评分列表
-        user_recommended_rates_s4rec[user].append((item, rp))
-        # 实际物品评分列表
-        user_actual_rates[user].append(item)  # 只需要item_id
-    # print(f"Number of skipped entries due to KeyError: {key_error_count}")
-
-    # 为了确保推荐列表是根据评分排序的
-    for user in user_recommended_rates_s4rec:
-        user_recommended_rates_s4rec[user] = sorted(user_recommended_rates_s4rec[user], key=lambda x: x[1],
-                                                    reverse=True)
-
-    # 步骤3: 计算指标
-    ks = [5, 10, 20, 30]
-    metrics = {
-        'hit_ratio': {k: [] for k in ks},
-        'recall': {k: [] for k in ks},
-        'precision': {k: [] for k in ks},
-        'ndcg': {k: [] for k in ks},
-        'mrr': {k: [] for k in ks}
-    }
-
-    for user in user_actual_rates:
-        recommended_items = [item for item, rate in user_recommended_rates_s4rec[user]]
-        actual_items = user_actual_rates[user]
-        for k in ks:
-            metrics['hit_ratio'][k].append(hit_ratio_at_k(recommended_items, actual_items, k))
-            metrics['recall'][k].append(recall_at_k(recommended_items, actual_items, k))
-            metrics['precision'][k].append(precision_at_k(recommended_items, actual_items, k))
-            metrics['ndcg'][k].append(ndcg_at_k(recommended_items, actual_items, k))
-            metrics['mrr'][k].append(mrr_at_k(recommended_items, actual_items, k))
-
-    # 步骤4: 打印指标
-    # 创建一个空的DataFrame用于存储结果
-    columns = ['Top-K', 'Hit Ratio', 'Recall', 'Precision', 'NDCG', 'MRR']
-    results_df = pd.DataFrame(columns=columns)
-    for k in ks:
-        row = {
-            'Top-K': k,
-            'Hit Ratio': np.mean(metrics['hit_ratio'][k]),
-            'Recall': np.mean(metrics['recall'][k]),
-            'Precision': np.mean(metrics['precision'][k]),
-            'NDCG': np.mean(metrics['ndcg'][k]),
-            'MRR': np.mean(metrics['mrr'][k])
-        }
-        results_df = results_df._append(row, ignore_index=True)
-        print(f'Top-{k}')
-        print(f"Hit Ratio: {np.mean(metrics['hit_ratio'][k]):.4f}")
-        print(f"Recall: {np.mean(metrics['recall'][k]):.4f}")
-        print(f"Precision: {np.mean(metrics['precision'][k]):.4f}")
-        print(f"NDCG: {np.mean(metrics['ndcg'][k]):.4f}")
-        print(f"MRR: {np.mean(metrics['mrr'][k]):.4f}")
-        print()
-    # 将DataFrame保存为CSV文件，这里可以添加数据集名称和参数到文件名中
-    dataset_name = 'Ciao'
-    # model_parameters = 'params1'  # 描述这次实验参数的字符串
-    csv_filename = f'{dataset_name}_metrics_s4rec_v0.csv'
-    results_df.to_csv(csv_filename, index=False)
-
-    print('-----------------结束评估s4rec指标-------------------------')
-
-
-def hit_ratio_at_k(recommended_list, actual_list, k):
-    return int(len(set(recommended_list[:k]) & set(actual_list)) > 0)
-
-
-def recall_at_k(recommended_list, actual_list, k):
-    return len(set(recommended_list[:k]) & set(actual_list)) / len(actual_list)
-
-
-def precision_at_k(recommended_list, actual_list, k):
-    return len(set(recommended_list[:k]) & set(actual_list)) / k
-
-
-def ndcg_at_k(recommended_list, actual_list, k):
-    k = min(k, len(recommended_list))
-    idcg = sum((1.0 / np.log2(i + 2) for i in range(min(len(actual_list), k))))
-    dcg = sum((1.0 / np.log2(i + 2) if recommended_list[i] in actual_list else 0.0 for i in range(k)))
-    return dcg / idcg if idcg > 0 else 0
-
-
-def mrr_at_k(recommended_list, actual_list, k):
-    for rank, item in enumerate(recommended_list[:k]):
-        if item in actual_list:
-            return 1 / (rank + 1)
-    return 0.0
-
-
 if __name__ == '__main__':
-    # process_dataset()
-    # s4rec_cold_rating_analysis('results/%s/test_best_predict_list' %dataset_name, 'wide_ciao/trustsvd')
-    # s4rec_cold_social_analysis('results/%s/test_best_predict_list' %dataset_name, 'wide_ciao/trustsvd')
-    evaluation_deep('results/%s/test_best_predict_list' % dataset_name, )
-    # evaluation_s4rec('results/%s/test_best_predict_list' %dataset_name, 'wide_ciao/trustsvd')
-
+    process_dataset()
+    s4rec_cold_rating_analysis('results/%s/test_best_predict_list' % dataset_name, 'wide_code/trustsvd')
+    s4rec_cold_social_analysis('results/%s/test_best_predict_list' % dataset_name, 'wide_code/trustsvd')
