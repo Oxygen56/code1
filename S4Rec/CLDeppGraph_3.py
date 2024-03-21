@@ -634,6 +634,8 @@ class CLDeppGraph_3(nn.Module):
         self.item_model_1 = _ItemModel_Edge(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
         self.item_model_2 = _ItemModel_Edge(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
 
+        self.tranh = TransH(self.user_emb, self.item_emb, self.item_emb, num_users, num_items, 5, self.emb_dim)
+
         self.rate_pred = nn.Sequential(
             nn.Dropout(p=0.5),
             nn.Linear(3 * self.emb_dim, 2 * self.emb_dim, bias=True),
@@ -679,9 +681,9 @@ class CLDeppGraph_3(nn.Module):
         cl_loss_total = 0
         tranh_loss = 0
         if train_state:
-            cl_loss_1 = -nn.functional.cosine_similarity(h_1, z_2)
-            cl_loss_2 = -nn.functional.cosine_similarity(h_2, z_1)
-            cl_loss_total = 0.5 * (cl_loss_1 + cl_loss_2)
+            cl_loss_1 = nn.functional.cosine_similarity(h_1, h_2)
+            cl_loss_2 = nn.functional.cosine_similarity(z_1, z_2)
+            cl_loss_total = cl_loss_1 + cl_loss_2
             cl_loss_total = cl_loss_total.mean()
             self.tranh.normalizeEmbedding()
             tranh_loss = self.tranh(pos_list, neg_list)

@@ -32,8 +32,9 @@ from dataloader import GRDataset
 from utils import collate_fn
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset_path', default='./dataset/Ciao/', help='dataset directory path: datasets/Ciao/Epinions')
-parser.add_argument('--dataset_name', default='Ciao', help='Ciap, Epinions, yelp')
+parser.add_argument('--dataset_path', default='./dataset/Epinions/',
+                    help='dataset directory path: datasets/Ciao/Epinions')
+parser.add_argument('--dataset_name', default='Epinions', help='Ciap, Epinions, yelp')
 parser.add_argument('--batch_size', type=int, default=256, help='input batch size')
 parser.add_argument('--embed_dim', type=int, default=80, help='the dimension of embedding')
 parser.add_argument('--epoch', type=int, default=30, help='the number of epochs to train for')
@@ -55,10 +56,10 @@ if torch.cuda.is_available():
 
 here = os.path.dirname(os.path.abspath(__file__))
 
-fn = 'results_2/' + args.dataset_name
+fn = 'results_1/' + args.dataset_name
 
-if not os.path.exists('results_2'):
-    os.mkdir('results_2')
+if not os.path.exists('results_1'):
+    os.mkdir('results_1')
 
 if not os.path.exists(fn):
     os.mkdir(fn)
@@ -233,10 +234,10 @@ def trainForEpoch(train_loader, valid_loader, test_loader, model, optimizer, epo
 
         optimizer.zero_grad()
         outputs, cl_r, r = model(uids, iids, u_items, u_users, u_users_items, i_users, i_sf_users, i_sf_users_items,
-                              i_friend_list, if_item_users, pos_list, neg_list, True)
+                                 i_friend_list, if_item_users, pos_list, neg_list, True)
 
         loss = criterion(outputs, labels.unsqueeze(1))
-        loss += 2*r + cl_r * 0.2
+        loss += 2 * r + cl_r * 0.0001
         loss.backward()
         optimizer.step()
 
@@ -246,8 +247,8 @@ def trainForEpoch(train_loader, valid_loader, test_loader, model, optimizer, epo
         iter_num = epoch * len(train_loader) + i + 1
 
         if i % log_aggr == 0:
-            print('[TRAIN Main 2] epoch %d/%d batch loss: %.4f %.4f (avg %.4f) (%.2f im/s)'
-                  % (epoch + 1, num_epochs, loss_val, cl_r.item(), sum_epoch_loss / (i + 1),
+            print('[TRAIN Main 2] epoch %d/%d batch loss: %.4f %.4f %.4f (avg %.4f) (%.2f im/s)'
+                  % (epoch + 1, num_epochs, loss_val, r.item(), cl_r.item(), sum_epoch_loss / (i + 1),
                      len(uids) / (time.time() - start)))
 
         start = time.time()
@@ -311,8 +312,8 @@ def validate(valid_loader, model):
             i_friend_list = i_friend_list.to(device)
             if_item_users = if_item_users.to(device)
 
-            preds, cl_loss, r = model(uids, iids, u_items, u_users, u_users_items, i_users, i_sf_users, i_sf_users_items,
-                                   i_friend_list, if_item_users, pos_list, neg_list, False)
+            preds, cl_loss, r = model(uids, iids, u_items, u_users, u_users_items, i_users, i_sf_users,
+                                      i_sf_users_items, i_friend_list, if_item_users, pos_list, neg_list, False)
             error = torch.abs(preds.squeeze(1) - labels)
             errors.extend(error.data.cpu().numpy().tolist())
             for idx, uid in enumerate(uids):

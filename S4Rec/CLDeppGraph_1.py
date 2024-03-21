@@ -2,6 +2,7 @@ from torch import nn
 import torch.nn.functional as F
 import torch
 from tranh import TransH
+from utils import InfoNCE
 import pickle
 
 
@@ -387,10 +388,9 @@ class CLDeppGraph_1(nn.Module):
         cl_loss_total = 0
         tranh_loss = 0
         if train_state:
-            cl_loss_1 = -nn.functional.cosine_similarity(h_1, z_2)
-            cl_loss_2 = -nn.functional.cosine_similarity(h_2, z_1)
-            cl_loss_total = 0.5 * (cl_loss_1 + cl_loss_2)
-            cl_loss_total = cl_loss_total.mean()
+            user_cl_loss = InfoNCE(h_1, h_2, 0.2)
+            item_cl_loss = InfoNCE(z_1, z_2, 0.2)
+            cl_loss_total = user_cl_loss + item_cl_loss
             self.tranh.normalizeEmbedding()
             tranh_loss = self.tranh(pos_list, neg_list)
 
