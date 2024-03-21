@@ -1,6 +1,8 @@
 from torch import nn
 import torch.nn.functional as F
 import torch
+from tranh import TransH
+import pickle
 
 
 class _MultiLayerPercep(nn.Module):
@@ -198,13 +200,13 @@ class _UserModel(nn.Module):
         return h
 
 
-class _UserModel_Dropout(nn.Module):
+class _UserModel_Edge(nn.Module):
     ''' User modeling to learn user latent factors.
     User modeling leverages two types aggregation: item aggregation and social aggregation
     '''
 
     def __init__(self, emb_dim, user_emb, item_emb, rate_emb):
-        super(_UserModel_Dropout, self).__init__()
+        super(_UserModel_Edge, self).__init__()
         self.user_emb = user_emb
         self.item_emb = item_emb
         self.rate_emb = rate_emb
@@ -248,7 +250,6 @@ class _UserModel_Dropout(nn.Module):
             nn.Linear(3 * self.emb_dim, self.emb_dim, bias=True),
             nn.ReLU()
         )
-
         self.dropout = nn.Dropout(p=0.2)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         # used for preventing zero div error when calculating softmax score
@@ -262,7 +263,6 @@ class _UserModel_Dropout(nn.Module):
         u_item_er = self.rate_emb(u_item_pad[:, :, 1])  # B x maxi_len x emb_dim
         x_ia = self.g_v(torch.cat([q_a, u_item_er], dim=2).view(-1, 2 * self.emb_dim)).view(
             q_a.size())  # B x maxi_len x emb_dim
-        x_ia = self.dropout(x_ia)
         p_i = mask_u.unsqueeze(2).expand_as(q_a) * self.user_emb(uids).unsqueeze(1).expand_as(
             q_a)  # B x maxi_len x emb_dim
 
@@ -292,6 +292,7 @@ class _UserModel_Dropout(nn.Module):
             mask_sf.size())  # B x maxu_len x maxi_len
         alpha_i_sf = torch.exp(alpha_i_sf) * mask_sf
         alpha_i_sf = alpha_i_sf / (torch.sum(alpha_i_sf, 2).unsqueeze(2).expand_as(alpha_i_sf) + self.eps)
+        alpha_i_sf = self.dropout(alpha_i_sf)
 
         h_sfI_temp = torch.sum(alpha_i_sf.unsqueeze(3).expand_as(x_ia_sf) * self.w2(x_ia_sf),
                                2)  # B x maxu_len x emb_dim
@@ -484,12 +485,12 @@ class _ItemModel(nn.Module):
         return z
 
 
-class _ItemModel_Dropout(nn.Module):
+class _ItemModel_Edge(nn.Module):
     '''Item modeling to learn item latent factors.
     '''
 
     def __init__(self, emb_dim, user_emb, item_emb, rate_emb):
-        super(_ItemModel_Dropout, self).__init__()
+        super(_ItemModel_Edge, self).__init__()
         self.emb_dim = emb_dim
         self.user_emb = user_emb
         self.item_emb = item_emb
@@ -524,7 +525,6 @@ class _ItemModel_Dropout(nn.Module):
             nn.ReLU()
         )
         self.dropout = nn.Dropout(p=0.2)
-
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         # used for preventing zero div error when calculating softmax score
         self.eps = 1e-10
@@ -536,7 +536,7 @@ class _ItemModel_Dropout(nn.Module):
                              torch.tensor([0.], device=self.device))
         i_user_er = self.rate_emb(i_user_pad[:, :, 1])
         f_jt = self.g_u(torch.cat([p_t, i_user_er], dim=2).view(-1, 2 * self.emb_dim)).view(p_t.size())
-        f_jt = self.dropout(f_jt)
+
         # calculate attention scores in user aggregation
         q_j = mask_i.unsqueeze(2).expand_as(f_jt) * self.item_emb(iids).unsqueeze(1).expand_as(f_jt)
 
@@ -561,6 +561,7 @@ class _ItemModel_Dropout(nn.Module):
             mask_u.size())  # B x maxi_len
         alpha = torch.exp(alpha) * mask_u
         alpha = alpha / (torch.sum(alpha, 1).unsqueeze(1).expand_as(alpha) + self.eps)
+        alpha = self.dropout(alpha)
 
         z_if = self.aggre_i_friends(torch.sum(alpha.unsqueeze(2).expand_as(q_a) * self.w2(q_a), 1))  # B x emb_dim
         z_if = F.dropout(z_if, p=0.5, training=self.training)
@@ -599,7 +600,7 @@ class _ItemModel_Dropout(nn.Module):
         return z
 
 
-class CLDeppGraph_2(nn.Module):
+class CLDeppGraph_3(nn.Module):
     '''GraphRec model proposed in the paper Graph neural network for social recommendation
 
     Args:
@@ -611,7 +612,7 @@ class CLDeppGraph_2(nn.Module):
     '''
 
     def __init__(self, user_emb, item_emb, rate_emb, num_users, num_items, num_rate_levels, emb_dim=64, eps=1.e-1):
-        super(CLDeppGraph_2, self).__init__()
+        super(CLDeppGraph_3, self).__init__()
         self.num_users = num_users
         self.num_items = num_items
         self.num_rate_levels = num_rate_levels
@@ -623,16 +624,15 @@ class CLDeppGraph_2(nn.Module):
         self.item_emb.weight.data.copy_(torch.from_numpy(item_emb))
         self.rate_emb = nn.Embedding(self.num_rate_levels, self.emb_dim, padding_idx=0)
         self.rate_emb.weight.data.copy_(torch.from_numpy(rate_emb))
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.user_model = _UserModel(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
         self.item_model = _ItemModel(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
 
-        self.user_model_1 = _UserModel_Dropout(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
-        self.user_model_2 = _UserModel_Dropout(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
+        self.user_model_1 = _UserModel_Edge(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
+        self.user_model_2 = _UserModel_Edge(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
 
-        self.item_model_1 = _ItemModel_Dropout(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
-        self.item_model_2 = _ItemModel_Dropout(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
+        self.item_model_1 = _ItemModel_Edge(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
+        self.item_model_2 = _ItemModel_Edge(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
 
         self.rate_pred = nn.Sequential(
             nn.Dropout(p=0.5),
@@ -647,7 +647,28 @@ class CLDeppGraph_2(nn.Module):
 
     def forward(self, uids, iids, u_item_pad, u_user_pad, u_user_item_pad, i_user_pad, sf_user_pad, sf_user_item_pad,
                 i_friends_pad, i_friends_user_pad, pos_list, neg_list, train_state=True):
+        '''
+        Args:
+            uids: the user id sequences.
+            iids: the item id sequences.
+            u_item_pad: the padded user-item graph.
+            u_user_pad: the padded user-user graph.
+            u_user_item_pad: the padded user-user-item graph.
+            i_user_pad: the padded item-user graph.
+            sf_user_pad: the padded user-user share common fans graph
 
+        Shapes:
+            uids: (B).
+            iids: (B).
+            u_item_pad: (B, ItemSeqMaxLen, 2).
+            u_user_pad: (B, UserSeqMaxLen).
+            u_user_item_pad: (B, UserSeqMaxLen, ItemSeqMaxLen, 2).
+            i_user_pad: (B, UserSeqMaxLen, 2).
+            sf_user_pad: (B, SfuserSeqMaxLen, 2)
+
+        Returns:
+            the predicted rate scores of the user to the item.
+        '''
         h = self.user_model(uids, iids, u_item_pad, u_user_pad, u_user_item_pad, sf_user_pad, sf_user_item_pad)
         z = self.item_model(uids, iids, i_user_pad, i_friends_pad, i_friends_user_pad)
         h_1 = self.user_model_1(uids, iids, u_item_pad, u_user_pad, u_user_item_pad, sf_user_pad, sf_user_item_pad)
@@ -656,12 +677,15 @@ class CLDeppGraph_2(nn.Module):
         z_2 = self.item_model_2(uids, iids, i_user_pad, i_friends_pad, i_friends_user_pad)
 
         cl_loss_total = 0
+        tranh_loss = 0
         if train_state:
             cl_loss_1 = -nn.functional.cosine_similarity(h_1, z_2)
             cl_loss_2 = -nn.functional.cosine_similarity(h_2, z_1)
             cl_loss_total = 0.5 * (cl_loss_1 + cl_loss_2)
             cl_loss_total = cl_loss_total.mean()
+            self.tranh.normalizeEmbedding()
+            tranh_loss = self.tranh(pos_list, neg_list)
 
         r_ij = self.rate_pred(torch.cat([h, z, h * z], dim=1))
 
-        return r_ij, cl_loss_total
+        return r_ij, cl_loss_total, tranh_loss
