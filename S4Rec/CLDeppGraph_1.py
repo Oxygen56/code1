@@ -86,15 +86,27 @@ class _UserModel(nn.Module):
         # used for preventing zero div error when calculating softmax score
         self.eps = 1e-10
 
-    def forward(self, uids, iids, u_item_pad, u_user_pad, u_user_item_pad, sf_user_pad, sf_user_item_pad):
+    def forward(self, uids, iids, u_item_pad, u_user_pad, u_user_item_pad, sf_user_pad, sf_user_item_pad, cl=0):
+        if cl == 1:
+            random_noise_i = torch.rand_like(self.item_emb.weight).to(self.device)
+            normalized_noise_i = torch.sign(self.item_emb.weight) * F.normalize(random_noise_i, dim=-1) * 0.1
+            item_emb = self.item_emb.weight + normalized_noise_i
+
+            random_noise_u = torch.rand_like(self.user_emb.weight).to(self.device)
+            normalized_noise_u = torch.sign(self.user_emb.weight) * F.normalize(random_noise_u, dim=-1) * 0.1
+            user_emb = self.user_emb.weight + normalized_noise_u
+        else:
+            # 使用原始嵌入
+            user_emb = self.user_emb
+            item_emb = self.item_emb
         # item aggregation
-        q_a = self.item_emb(u_item_pad[:, :, 0])  # B x maxi_len x emb_dim
+        q_a = item_emb[u_item_pad[:, :, 0]]  # B x maxi_len x emb_dim
         mask_u = torch.where(u_item_pad[:, :, 0] > 0, torch.tensor([1.], device=self.device),
                              torch.tensor([0.], device=self.device))  # B x maxi_len
         u_item_er = self.rate_emb(u_item_pad[:, :, 1])  # B x maxi_len x emb_dim
         x_ia = self.g_v(torch.cat([q_a, u_item_er], dim=2).view(-1, 2 * self.emb_dim)).view(
             q_a.size())  # B x maxi_len x emb_dim
-        p_i = mask_u.unsqueeze(2).expand_as(q_a) * self.user_emb(uids).unsqueeze(1).expand_as(
+        p_i = mask_u.unsqueeze(2).expand_as(q_a) * user_emb(uids).unsqueeze(1).expand_as(
             q_a)  # B x maxi_len x emb_dim
 
         # alpha = self.user_items_att(torch.cat([x_ia, p_i], dim = 2)) 就够了，B, maxi_len,1
@@ -108,14 +120,14 @@ class _UserModel(nn.Module):
         h_iI = F.dropout(h_iI, 0.5, training=self.training)
 
         # sf_user
-        q_a_f = self.item_emb(sf_user_item_pad[:, :, :, 0])  # B x maxu_len x maxi_len x emb_dim
+        q_a_f = item_emb(sf_user_item_pad[:, :, :, 0])  # B x maxu_len x maxi_len x emb_dim
         mask_sf = torch.where(sf_user_item_pad[:, :, :, 0] > 0, torch.tensor([1.], device=self.device),
                               torch.tensor([0.], device=self.device))  # B x maxu_len x maxi_len
         sf_user_item_er = self.rate_emb(sf_user_item_pad[:, :, :, 1])  # B x maxu_len x maxi_len x emb_dim
         x_ia_sf = self.g_v(torch.cat([q_a_f, sf_user_item_er], dim=3).view(-1, 2 * self.emb_dim)).view(
             q_a_f.size())  # B x maxu_len x maxi_len x emb_dim
 
-        p_i_sf = mask_sf.unsqueeze(3).expand_as(q_a_f) * self.user_emb(sf_user_pad[:, :, 0]).unsqueeze(2).expand_as(
+        p_i_sf = mask_sf.unsqueeze(3).expand_as(q_a_f) * user_emb(sf_user_pad[:, :, 0]).unsqueeze(2).expand_as(
             q_a_f)  # B x maxu_len x maxi_len x emb_dim
 
         alpha_i_sf = self.user_items_att_sf1(
@@ -134,7 +146,7 @@ class _UserModel(nn.Module):
                                torch.tensor([0.], device=self.device))
 
         ##calculate attention score
-        p_u_sf = mask_u_f.unsqueeze(2).expand_as(h_sfI) * self.user_emb(uids).unsqueeze(1).expand_as(h_sfI)
+        p_u_sf = mask_u_f.unsqueeze(2).expand_as(h_sfI) * user_emb(uids).unsqueeze(1).expand_as(h_sfI)
         # p_u_sf = self.user_emb(sf_user_pad[:,:,0])
         beta_sf = self.sf_users_att(
             torch.cat([self.w3(h_sfI), self.w3(p_u_sf)], dim=2).view(-1, 2 * self.emb_dim)).view(mask_u_f.size())
@@ -145,10 +157,10 @@ class _UserModel(nn.Module):
         h_i_sf = F.dropout(h_i_sf, p=0.5, training=self.training)
 
         # social aggregation
-        q_a_s = self.item_emb(u_user_item_pad[:, :, :, 0])  # B x maxu_len x maxi_len x emb_dim
+        q_a_s = item_emb(u_user_item_pad[:, :, :, 0])  # B x maxu_len x maxi_len x emb_dim
         mask_s = torch.where(u_user_item_pad[:, :, :, 0] > 0, torch.tensor([1.], device=self.device),
                              torch.tensor([0.], device=self.device))  # B x maxu_len x maxi_len
-        p_i_s = mask_s.unsqueeze(3).expand_as(q_a_s) * self.user_emb(u_user_pad).unsqueeze(2).expand_as(
+        p_i_s = mask_s.unsqueeze(3).expand_as(q_a_s) * user_emb(u_user_pad).unsqueeze(2).expand_as(
             q_a_s)  # B x maxu_len x maxi_len x emb_dim
         u_user_item_er = self.rate_emb(u_user_item_pad[:, :, :, 1])  # B x maxu_len x maxi_len x emb_dim
         x_ia_s = self.g_v(torch.cat([q_a_s, u_user_item_er], dim=3).view(-1, 2 * self.emb_dim)).view(
@@ -169,15 +181,15 @@ class _UserModel(nn.Module):
                               torch.tensor([0.], device=self.device))
 
         beta = self.user_users_att_s2(
-            torch.cat([self.w5(h_oI), self.w5(self.user_emb(u_user_pad))], dim=2).view(-1, 2 * self.emb_dim)).view(
+            torch.cat([self.w5(h_oI), self.w5(user_emb(u_user_pad))], dim=2).view(-1, 2 * self.emb_dim)).view(
             u_user_pad.size())
         beta = torch.exp(beta) * mask_su
         beta = beta / (torch.sum(beta, 1).unsqueeze(1).expand_as(beta) + self.eps)
         h_iS = self.aggre_neigbors_s2(torch.sum(beta.unsqueeze(2).expand_as(h_oI) * self.w5(h_oI), 1))  # B x emb_dim
         h_iS = F.dropout(h_iS, p=0.5, training=self.training)
 
-        su = self.user_emb(u_user_pad)
-        p_uf = mask_su.unsqueeze(2).expand_as(su) * self.user_emb(uids).unsqueeze(1).expand_as(su)
+        su = user_emb(u_user_pad)
+        p_uf = mask_su.unsqueeze(2).expand_as(su) * user_emb(uids).unsqueeze(1).expand_as(su)
         alpha_su = self.u_user_users_att(torch.cat([self.w6(su), self.w6(p_uf)], dim=2)).view(mask_su.size())
         # alpha_su = torch.matmul(su, F.tanh(self.user_users_att(ti_emb)).unsqueeze(2)).squeeze()
         alpha_su = torch.exp(alpha_su) * mask_su
@@ -186,8 +198,8 @@ class _UserModel(nn.Module):
         h_su = self.u_aggre_neigbors(torch.sum(alpha_su.unsqueeze(2).expand_as(su) * self.w6(su), 1))
         h_su = F.dropout(h_su, p=0.5, training=self.training)
 
-        sf = self.user_emb(sf_user_pad[:, :, 0])
-        p_sf = mask_u_f.unsqueeze(2).expand_as(sf) * self.user_emb(uids).unsqueeze(1).expand_as(sf)
+        sf = user_emb(sf_user_pad[:, :, 0])
+        p_sf = mask_u_f.unsqueeze(2).expand_as(sf) * user_emb(uids).unsqueeze(1).expand_as(sf)
         alpha_sf = self.sf_user_users_att(torch.cat([self.w7(sf), self.w7(p_sf)], dim=2)).view(mask_u_f.size())
         alpha_sf = torch.exp(alpha_sf) * mask_u_f
         alpha_sf = alpha_sf / (torch.sum(alpha_sf, 1).unsqueeze(1).expand_as(alpha_sf) + self.eps)
@@ -245,16 +257,28 @@ class _ItemModel(nn.Module):
         # used for preventing zero div error when calculating softmax score
         self.eps = 1e-10
 
-    def forward(self, uids, iids, i_user_pad, i_friends_pad, i_friends_user_pad):
-        # user aggregation
-        p_t = self.user_emb(i_user_pad[:, :, 0])
+    def forward(self, uids, iids, i_user_pad, i_friends_pad, i_friends_user_pad, cl=0):
+        if cl == 1:
+            random_noise_i = torch.rand_like(self.item_emb.weight).to(self.device)
+            normalized_noise_i = torch.sign(self.item_emb.weight) * F.normalize(random_noise_i, dim=-1) * 0.1
+            item_emb = self.use_emb.weight + normalized_noise_i
+
+            random_noise_u = torch.rand_like(self.user_emb.weight).to(self.device)
+            normalized_noise_u = torch.sign(self.user_emb.weight) * F.normalize(random_noise_u, dim=-1) * 0.1
+            user_emb = self.use_emb.weight + normalized_noise_u
+        else:
+            # 使用原始嵌入
+            user_emb = self.user_emb
+            item_emb = self.item_emb
+            # user aggregation
+        p_t = user_emb(i_user_pad[:, :, 0])
         mask_i = torch.where(i_user_pad[:, :, 0] > 0, torch.tensor([1.], device=self.device),
                              torch.tensor([0.], device=self.device))
         i_user_er = self.rate_emb(i_user_pad[:, :, 1])
         f_jt = self.g_u(torch.cat([p_t, i_user_er], dim=2).view(-1, 2 * self.emb_dim)).view(p_t.size())
 
         # calculate attention scores in user aggregation
-        q_j = mask_i.unsqueeze(2).expand_as(f_jt) * self.item_emb(iids).unsqueeze(1).expand_as(f_jt)
+        q_j = mask_i.unsqueeze(2).expand_as(f_jt) * item_emb(iids).unsqueeze(1).expand_as(f_jt)
 
         miu = self.item_users_att_i(torch.cat([self.w1(f_jt), self.w1(q_j)], dim=2).view(-1, 2 * self.emb_dim)).view(
             mask_i.size())
@@ -264,12 +288,12 @@ class _ItemModel(nn.Module):
         z_j = F.dropout(z_j, p=0.5, training=self.training)
 
         # item aggregation
-        q_a = self.item_emb(i_friends_pad[:, :, 0])  # B x maxi_len x emb_dim
+        q_a = item_emb(i_friends_pad[:, :, 0])  # B x maxi_len x emb_dim
         mask_u = torch.where(i_friends_pad[:, :, 0] > 0, torch.tensor([1.], device=self.device),
                              torch.tensor([0.], device=self.device))  # B x maxi_len
         ## calculate attention scores in item aggregation
         # x_ia & p_i cat时候，保证pad位置不能被cat上
-        p_i = mask_u.unsqueeze(2).expand_as(q_a) * self.item_emb(iids).unsqueeze(1).expand_as(
+        p_i = mask_u.unsqueeze(2).expand_as(q_a) * item_emb(iids).unsqueeze(1).expand_as(
             q_a)  # B x maxi_len x emb_dim
         # alpha = self.user_items_att(torch.cat([x_ia, p_i], dim = 2)) 就够了，B, maxi_len,1
         # 计算attention的另一种方法，之前是pygat中增加大矩阵
@@ -282,7 +306,7 @@ class _ItemModel(nn.Module):
         z_if = F.dropout(z_if, p=0.5, training=self.training)
 
         # item users friends aggregation
-        q_a_s = self.user_emb(i_friends_user_pad[:, :, :, 0])  # B x maxi_len x maxu_len x emb_dim
+        q_a_s = user_emb(i_friends_user_pad[:, :, :, 0])  # B x maxi_len x maxu_len x emb_dim
         mask_s = torch.where(i_friends_user_pad[:, :, :, 0] > 0, torch.tensor([1.], device=self.device),
                              torch.tensor([0.], device=self.device))  # B x maxu_len x maxi_len
         u_user_item_er = self.rate_emb(i_friends_user_pad[:, :, :, 1])  # B x maxu_len x maxi_len x emb_dim
@@ -344,26 +368,8 @@ class CLDeppGraph_1(nn.Module):
         self.user_model = _UserModel(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
         self.item_model = _ItemModel(self.emb_dim, self.user_emb, self.item_emb, self.rate_emb)
 
-        #  noise CL
-        self.user_emb_noise = nn.Embedding(self.num_users, self.emb_dim, padding_idx=0).to(self.device)
-        user_emb = torch.from_numpy(user_emb).cuda()
-        random_noise = torch.rand_like(user_emb).cuda()
-        user_emb += torch.sign(user_emb) * F.normalize(random_noise, dim=-1) * self.eps
-        self.user_emb_noise.weight.data.copy_(user_emb)
-
-        self.item_emb_noise = nn.Embedding(self.num_items, self.emb_dim, padding_idx=0)
-        item_emb = torch.from_numpy(item_emb).cuda()
-        random_noise = torch.rand_like(item_emb).cuda()
-        item_emb += torch.sign(item_emb).cuda() * F.normalize(random_noise, dim=-1) * self.eps
-        self.item_emb_noise.weight.data.copy_(item_emb)
-
         self.tranh = TransH(self.user_emb, self.item_emb, self.item_emb, num_users, num_items, 5, self.emb_dim)
 
-        self.user_model_1 = _UserModel(self.emb_dim, self.user_emb, self.item_emb_noise, self.rate_emb)
-        self.user_model_2 = _UserModel(self.emb_dim, self.user_emb_noise, self.item_emb, self.rate_emb)
-
-        self.item_model_1 = _ItemModel(self.emb_dim, self.user_emb_noise, self.item_emb, self.rate_emb)
-        self.item_model_2 = _ItemModel(self.emb_dim, self.user_emb, self.item_emb_noise, self.rate_emb)
 
         self.rate_pred = nn.Sequential(
             nn.Dropout(p=0.5),
@@ -380,10 +386,10 @@ class CLDeppGraph_1(nn.Module):
                 i_friends_pad, i_friends_user_pad, pos_list, neg_list, train_state=True):
         h = self.user_model(uids, iids, u_item_pad, u_user_pad, u_user_item_pad, sf_user_pad, sf_user_item_pad)
         z = self.item_model(uids, iids, i_user_pad, i_friends_pad, i_friends_user_pad)
-        h_1 = self.user_model_1(uids, iids, u_item_pad, u_user_pad, u_user_item_pad, sf_user_pad, sf_user_item_pad)
-        z_1 = self.item_model_1(uids, iids, i_user_pad, i_friends_pad, i_friends_user_pad)
-        h_2 = self.user_model_2(uids, iids, u_item_pad, u_user_pad, u_user_item_pad, sf_user_pad, sf_user_item_pad)
-        z_2 = self.item_model_2(uids, iids, i_user_pad, i_friends_pad, i_friends_user_pad)
+        h_1 = self.user_model(uids, iids, u_item_pad, u_user_pad, u_user_item_pad, sf_user_pad, sf_user_item_pad, 1)
+        z_1 = self.item_model(uids, iids, i_user_pad, i_friends_pad, i_friends_user_pad, 1)
+        h_2 = self.user_model(uids, iids, u_item_pad, u_user_pad, u_user_item_pad, sf_user_pad, sf_user_item_pad, 1)
+        z_2 = self.item_model(uids, iids, i_user_pad, i_friends_pad, i_friends_user_pad, 1)
 
         cl_loss_total = 0
         tranh_loss = 0
